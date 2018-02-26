@@ -1804,7 +1804,7 @@ static int insert_pfn(struct vm_area_struct *vma, unsigned long addr,
 				goto out_unlock;
 			entry = *pte;
 			goto out_mkwrite;
-		} else
+		} else if (!(vma->vm_flags & VM_LOCAL_CPU))
 			goto out_unlock;
 	}
 
