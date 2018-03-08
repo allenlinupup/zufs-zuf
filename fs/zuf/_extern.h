@@ -62,6 +62,29 @@ ssize_t zuf_rw_write_iter(struct kiocb *kiocb, struct iov_iter *ii);
 /* file.c */
 int zuf_isync(struct inode *inode, loff_t start, loff_t end, int datasync);
 
+/* xattr.c */
+int tozu_initxattrs(struct inode *inode, const struct xattr *xattr_array,
+		    void *fs_info);
+struct tozu_xattr *tozu_new_xattr(struct super_block *sb, int type,
+				  const char *name, size_t length,
+				  const void *value, size_t size, ulong *xno);
+ssize_t __tozu_getxattr(struct inode *inode, int type, const char *name,
+			void *buffer, size_t size,
+			struct tozu_xattr **xattr_out,
+			struct tozu_xattr **pprev);
+int __tozu_setxattr(struct inode *inode, int type, const char *name,
+		    struct tozu_xattr *new_xattr, ulong new_xno, int flags);
+void __tozu_removexattrs(struct super_block *sb, struct zus_inode *zi);
+ssize_t tozu_listxattr(struct dentry *dentry, char *buffer, size_t size);
+extern const struct xattr_handler *tozu_xattr_handlers[];
+
+/* acl.c */
+int tozu_set_acl(struct inode *inode, struct posix_acl *acl, int type);
+struct posix_acl *tozu_get_acl(struct inode *inode, int type);
+int tozu_acls_create(struct inode *dir, struct inode *inode);
+extern const struct xattr_handler tozu_acl_access_xattr_handler;
+extern const struct xattr_handler tozu_acl_default_xattr_handler;
+
 /* super.c */
 int zuf_init_inodecache(void);
 void zuf_destroy_inodecache(void);

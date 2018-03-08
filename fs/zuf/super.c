@@ -296,6 +296,7 @@ static int zuf_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_flags |= MS_NOSEC | (rfi->acl_on ? MS_POSIXACL : 0);
 
 	sb->s_op = &zuf_sops;
+	sb->s_xattr = tozu_xattr_handlers;
 
 	root_i = zuf_iget(sb, zim.zus_ii, zim._zi, &exist);
 	if (IS_ERR(root_i)) {

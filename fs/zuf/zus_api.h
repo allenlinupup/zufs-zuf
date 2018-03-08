@@ -205,6 +205,28 @@ static inline int msb_minor_version(struct zufs_dev_table *msb)
 
 #define ZUFS_SB_STATIC_SIZE(ps) ((u64)&ps->s_start_dynamic - (u64)ps)
 
+/* xattr types */
+enum {	X_F_SECURITY    = 1,
+	X_F_SYSTEM      = 2,
+	X_F_TRUSTED     = 3,
+	X_F_USER        = 4,
+};
+
+struct tozu_xattr {
+	__le64	next;
+	__le16	name_length;
+	__le16	value_size;
+	u8	type;
+	u8	res1[3];
+	char	data[0];
+} __packed;
+
+struct tozu_acl {
+	__le16	tag;
+	__le16	perm;
+	__le32	id;
+} __packed;
+
 /* ~~~~~ ZUFS API ioctl commands ~~~~~ */
 enum {
 	ZUS_API_MAP_MAX_PAGES	= 1024,

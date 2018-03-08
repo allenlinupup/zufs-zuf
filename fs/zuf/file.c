@@ -407,4 +407,12 @@ const struct inode_operations zuf_file_inode_operations = {
 	.getattr	= zuf_getattr,
 	.update_time	= zuf_update_time,
 	.fiemap		= tozu_fiemap,
+	.get_acl	= tozu_get_acl,
+	.set_acl	= tozu_set_acl,
+	.listxattr	= tozu_listxattr,
+#ifdef BACKPORT_NEED_I_OPT_XATTR
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
+	.removexattr	= generic_removexattr,
+#endif
 };

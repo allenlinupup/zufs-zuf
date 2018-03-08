@@ -412,10 +412,26 @@ const struct inode_operations zuf_dir_inode_operations = {
 	.setattr	= zuf_setattr,
 	.getattr	= zuf_getattr,
 	.update_time	= zuf_update_time,
+	.get_acl	= tozu_get_acl,
+	.set_acl	= tozu_set_acl,
+	.listxattr	= tozu_listxattr,
+#ifdef BACKPORT_NEED_I_OPT_XATTR
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
+	.removexattr	= generic_removexattr,
+#endif
 };
 
 const struct inode_operations zuf_special_inode_operations = {
 	.setattr	= zuf_setattr,
 	.getattr	= zuf_getattr,
 	.update_time	= zuf_update_time,
+	.get_acl	= tozu_get_acl,
+	.set_acl	= tozu_set_acl,
+	.listxattr	= tozu_listxattr,
+#ifdef BACKPORT_NEED_I_OPT_XATTR
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
+	.removexattr	= generic_removexattr,
+#endif
 };
