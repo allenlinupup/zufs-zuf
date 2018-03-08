@@ -217,6 +217,35 @@ static int tozu_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	return err;
 }
 
+int tozu_fadvise(struct file *file, loff_t offset, loff_t len, int advice)
+{
+	struct address_space *mapping;
+	struct inode *inode;
+	struct zus_inode *zi;
+	struct super_block *sb;
+
+	inode = file_inode(file);
+	if (S_ISFIFO(inode->i_mode))
+		return -ESPIPE;
+
+	mapping = file->f_mapping;
+	if (!mapping || len < 0)
+		return -EINVAL;
+
+	zi = zus_zi(inode);
+	if (unlikely(!zi))
+		return -EACCES;
+
+	zuf_dbg_rw("[%ld] offset=0x%llx length=0x%llx advice=0x%x\n",
+		       inode->i_ino, offset, len, advice);
+
+	sb = inode->i_sb;
+
+	/*TODO: ZUS_fadvise */
+
+	return 0;
+}
+
 static void _lock_two_ziis(struct zuf_inode_info *zii1,
 			   struct zuf_inode_info *zii2)
 {

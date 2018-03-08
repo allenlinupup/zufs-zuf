@@ -227,6 +227,15 @@ struct tozu_acl {
 	__le32	id;
 } __packed;
 
+/* ~~~~~ special tozu ioctl commands ~~~~~ */
+struct tozu_fadvise {
+	__u64	offset;
+	__u64	length;		/* if 0 all file */
+	__u64	flags;
+} __packed;
+
+#define ZUFS_IOC_FADVISE	_IOW('S', 2, struct tozu_fadvise)
+
 /* ~~~~~ ZUFS API ioctl commands ~~~~~ */
 enum {
 	ZUS_API_MAP_MAX_PAGES	= 1024,

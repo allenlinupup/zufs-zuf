@@ -61,6 +61,7 @@ ssize_t zuf_rw_write_iter(struct kiocb *kiocb, struct iov_iter *ii);
 
 /* file.c */
 int zuf_isync(struct inode *inode, loff_t start, loff_t end, int datasync);
+int tozu_fadvise(struct file *file, loff_t offset, loff_t len, int advice);
 
 /* xattr.c */
 int tozu_initxattrs(struct inode *inode, const struct xattr *xattr_array,

@@ -110,6 +110,17 @@ long tozu_ioctl(struct file *filp, unsigned int cmd, ulong arg)
 		return put_user(inode->i_generation, (int __user *)arg);
 	case FS_IOC_SETVERSION:
 		return _ioc_setversion(inode, parg);
+	case ZUFS_IOC_FADVISE: {
+		struct tozu_fadvise mds = {.flags = 0} ;
+
+		if (arg && copy_from_user(&mds, parg, sizeof(mds)))
+			return -EFAULT;
+
+		/* backwards compatibility */
+		return tozu_fadvise(filp, mds.offset, mds.length,
+				    mds.flags ?: POSIX_FADV_WILLNEED);
+	}
+
 	default:
 		zuf_err("%x %lx\n", cmd, ZU_IOC_WAIT_OPT);
 		return -ENOTTY;
