@@ -153,4 +153,8 @@ const struct file_operations zuf_dir_operations = {
 	.read		= generic_read_dir,
 	.iterate_shared	= zuf_readdir,
 	.fsync		= noop_fsync,
+	.unlocked_ioctl = tozu_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl	= tozu_compat_ioctl,
+#endif
 };

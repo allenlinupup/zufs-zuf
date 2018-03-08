@@ -393,7 +393,11 @@ const struct file_operations zuf_file_operations = {
 	.fsync			= zuf_fsync,
 	.flush			= zuf_flush,
 	.release		= zuf_file_release,
+	.unlocked_ioctl		= tozu_ioctl,
 	.fallocate		= zuf_fallocate,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl		= tozu_compat_ioctl,
+#endif
 	.copy_file_range	= zuf_copy_file_range,
 	.clone_file_range	= zuf_clone_file_range,
 };
