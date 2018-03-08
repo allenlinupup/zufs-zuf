@@ -529,6 +529,32 @@ static inline bool zufs_zde_emit(struct zufs_readdir_iter *rdi, __u64 ino,
 	return true;
 }
 
+/* ZUS_OP_READ/ZUS_OP_WRITE */
+struct zufs_ioc_IO {
+	struct zufs_ioc_hdr hdr;
+	struct zus_inode_info *zus_ii; /* IN */
+
+	__u64 filepos;
+};
+
+enum {
+	ZUFS_GBF_RESERVED = 1,
+	ZUFS_GBF_NEW = 2,
+};
+
+/* ZUS_OP_GET_BLOCK */
+struct zufs_ioc_get_block {
+	struct zufs_ioc_hdr hdr;
+	 /* IN */
+	struct zus_inode_info *zus_ii;
+	__u64 index; /* page index in file */
+	__u64 rw; /* Some flags + READ or WRITE */
+
+	/* OUT */
+	zu_dpp_t pmem_bn; /* zero return means: map a hole */
+	__u64 ret_flags;  /* One of ZUFS_GBF_XXX */
+};
+
 /* ZUS_OP_GET_SYMLINK */
 struct zufs_ioc_get_link {
 	struct zufs_ioc_hdr hdr;

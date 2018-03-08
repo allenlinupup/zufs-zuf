@@ -386,6 +386,9 @@ static int zuf_file_release(struct inode *inode, struct file *filp)
 
 const struct file_operations zuf_file_operations = {
 	.llseek			= zuf_llseek,
+	.read_iter		= zuf_rw_read_iter,
+	.write_iter		= zuf_rw_write_iter,
+	.mmap			= zuf_file_mmap,
 	.open			= generic_file_open,
 	.fsync			= zuf_fsync,
 	.flush			= zuf_flush,

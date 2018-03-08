@@ -46,6 +46,13 @@ bool zuf_dir_emit(struct super_block *sb, struct dir_context *ctx,
 uint zuf_prepare_symname(struct zufs_ioc_new_inode *ioc_new_inode,
 			const char *symname, ulong len, struct page *pages[2]);
 
+/* mmap.c */
+int zuf_file_mmap(struct file *file, struct vm_area_struct *vma);
+
+/* rw.c */
+ssize_t zuf_rw_read_iter(struct kiocb *kiocb, struct iov_iter *ii);
+ssize_t zuf_rw_write_iter(struct kiocb *kiocb, struct iov_iter *ii);
+
 /* file.c */
 int zuf_isync(struct inode *inode, loff_t start, loff_t end, int datasync);
 
