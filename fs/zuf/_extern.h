@@ -19,7 +19,16 @@
  * extern functions declarations
  */
 
+/* inode.c */
+struct inode *zuf_iget(struct super_block *sb, struct zus_inode_info *zus_ii,
+		       zu_dpp_t _zi, bool *exist);
+void zuf_evict_inode(struct inode *inode);
+int zuf_write_inode(struct inode *inode, struct writeback_control *wbc);
+int zuf_isync(struct inode *inode, loff_t start, loff_t end, int datasync);
+
 /* super.c */
+int zuf_init_inodecache(void);
+void zuf_destroy_inodecache(void);
 struct dentry *zuf_mount(struct file_system_type *fs_type, int flags,
 			 const char *dev_name, void *data);
 
@@ -43,5 +52,8 @@ void zufs_mounter_release(struct file *filp);
 
 /* zuf-root.c */
 int zuf_register_fs(struct super_block *sb, struct zufs_ioc_register_fs *rfs);
+
+/* t1.c */
+int zuf_pmem_mmap(struct file *file, struct vm_area_struct *vma);
 
 #endif	/*ndef __ZUF_EXTERN_H__*/

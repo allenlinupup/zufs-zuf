@@ -117,6 +117,8 @@ int zufr_mmap(struct file *file, struct vm_area_struct *vma)
 	switch (zsf->type) {
 	case zlfs_e_zt:
 		return zuf_zt_mmap(file, vma);
+	case zlfs_e_pmem:
+		return zuf_pmem_mmap(file, vma);
 	default:
 		zuf_err("type=%d\n", zsf->type);
 		return -ENOTTY;
@@ -300,7 +302,10 @@ static struct kset *zufr_kset;
 
 int __init zuf_root_init(void)
 {
-	int err;
+	int err = zuf_init_inodecache();
+
+	if (unlikely(err))
+		return err;
 
 	zufr_kset = kset_create_and_add("zuf", NULL, fs_kobj);
 	if (!zufr_kset) {
@@ -317,6 +322,7 @@ int __init zuf_root_init(void)
 un_kset:
 	kset_unregister(zufr_kset);
 un_inodecache:
+	zuf_destroy_inodecache();
 	return err;
 }
 
@@ -324,6 +330,7 @@ void __exit zuf_root_exit(void)
 {
 	unregister_filesystem(&zufr_type);
 	kset_unregister(zufr_kset);
+	zuf_destroy_inodecache();
 }
 
 module_init(zuf_root_init)

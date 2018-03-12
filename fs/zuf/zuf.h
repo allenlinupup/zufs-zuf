@@ -26,7 +26,9 @@
 #include "zus_api.h"
 
 #include "relay.h"
+#include "t2.h"
 #include "_pr.h"
+#include "md.h"
 
 enum zlfs_e_special_file {
 	zlfs_e_zt = 1,
@@ -36,6 +38,15 @@ enum zlfs_e_special_file {
 
 struct zuf_special_file {
 	enum zlfs_e_special_file type;
+};
+
+/* Our special md structure */
+struct zuf_pmem {
+	struct multi_devices md; /* must be first */
+	struct list_head list;
+	struct zuf_special_file hdr;
+	uint pmem_id;
+	struct file *file;
 };
 
 /* This is the zuf-root.c mini filesystem */
@@ -82,6 +93,215 @@ static inline void zuf_add_fs_type(struct zuf_root_info *zri,
 {
 	/* Unlocked for now only one mount-thread with zus */
 	list_add(&zft->list, &zri->fst_list);
+}
+
+static inline void zuf_add_pmem(struct zuf_root_info *zri,
+				   struct multi_devices *md)
+{
+	struct zuf_pmem *z_pmem = (void *)md;
+
+	z_pmem->pmem_id = ++zri->next_pmem_id; /* Avoid 0 id */
+
+	/* Unlocked for now only one mount-thread with zus */
+	list_add(&z_pmem->list, &zri->pmem_list);
+}
+
+static inline uint zuf_pmem_id(struct multi_devices *md)
+{
+	struct zuf_pmem *z_pmem = container_of(md, struct zuf_pmem, md);
+
+	return z_pmem->pmem_id;
+}
+
+// void zuf_del_fs_type(struct zuf_root_info *zri, struct zuf_fs_type *zft);
+
+/*
+ * Private Super-block flags
+ */
+enum {
+	ZUF_MOUNT_PEDANTIC	= 0x000001,	/* Check for memory leaks */
+	ZUF_MOUNT_PEDANTIC_SHADOW = 0x00002,	/* */
+	ZUF_MOUNT_SILENT	= 0x000004,	/* verbosity is silent */
+	ZUF_MOUNT_EPHEMERAL	= 0x000008,	/* Don't persist the data */
+	ZUF_MOUNT_FAILED	= 0x000010,	/* mark a failed-mount */
+	ZUF_MOUNT_DAX		= 0x000020,	/* mounted with dax option */
+	ZUF_MOUNT_POSIXACL	= 0x000040,	/* mounted with posix acls */
+};
+
+#define clear_opt(sbi, opt)       (sbi->s_mount_opt &= ~ZUF_MOUNT_ ## opt)
+#define set_opt(sbi, opt)         (sbi->s_mount_opt |= ZUF_MOUNT_ ## opt)
+#define test_opt(sbi, opt)      (sbi->s_mount_opt & ZUF_MOUNT_ ## opt)
+
+#define ZUFS_DEF_SBI_MODE (S_IRUGO | S_IXUGO | S_IWUSR)
+
+/* Flags bits on zii->flags */
+enum {
+	ZII_UNMAP_LOCK	= 1,
+};
+
+/*
+ * ZUF per-inode data in memory
+ */
+struct zuf_inode_info {
+	struct inode		vfs_inode;
+
+	/* Stuff for mmap write */
+	struct rw_semaphore	in_sync;
+	struct list_head	i_mmap_dirty;
+	atomic_t		write_mapped;
+	atomic_t		vma_count;
+	struct page		*zero_page; /* TODO: Remove */
+
+	/* cookies from Server */
+	struct zus_inode	*zi;
+	struct zus_inode_info	*zus_ii;
+};
+
+static inline struct zuf_inode_info *ZUII(struct inode *inode)
+{
+	return container_of(inode, struct zuf_inode_info, vfs_inode);
+}
+
+/*
+ * ZUF super-block data in memory
+ */
+struct zuf_sb_info {
+	struct super_block *sb;
+	struct multi_devices *md;
+
+	/* zus cookie*/
+	struct zus_sb_info *zus_sbi;
+
+	/* Mount options */
+	unsigned long	s_mount_opt;
+	kuid_t		uid;    /* Mount uid for root directory */
+	kgid_t		gid;    /* Mount gid for root directory */
+	umode_t		mode;   /* Mount mode for root directory */
+
+	spinlock_t		s_mmap_dirty_lock;
+	struct list_head	s_mmap_dirty;
+};
+
+static inline struct zuf_sb_info *SBI(struct super_block *sb)
+{
+	return sb->s_fs_info;
+}
+
+static inline struct zuf_fs_type *ZUF_FST(struct file_system_type *fs_type)
+{
+	return container_of(fs_type, struct zuf_fs_type, vfs_fst);
+}
+
+static inline struct zuf_fs_type *zuf_fst(struct super_block *sb)
+{
+	return ZUF_FST(sb->s_type);
+}
+
+static inline struct zuf_root_info *ZUF_ROOT(struct zuf_sb_info *sbi)
+{
+	return zuf_fst(sbi->sb)->zri;
+}
+
+static inline bool zuf_rdonly(struct super_block *sb)
+{
+	return sb->s_flags & MS_RDONLY;
+}
+
+static inline struct zus_inode *zus_zi(struct inode *inode)
+{
+	return ZUII(inode)->zi;
+}
+
+/* An accessor because of the frequent use in prints */
+static inline ulong _zi_ino(struct zus_inode *zi)
+{
+	return le64_to_cpu(zi->i_ino);
+}
+
+static inline bool _zi_active(struct zus_inode *zi)
+{
+	return (zi->i_nlink || zi->i_mode);
+}
+
+static inline void mt_to_timespec(struct timespec *t, __le64 *mt)
+{
+	u32 nsec;
+
+	t->tv_sec = div_s64_rem(le64_to_cpu(*mt), NSEC_PER_SEC, &nsec);
+	t->tv_nsec = nsec;
+}
+
+static inline void timespec_to_mt(__le64 *mt, struct timespec *t)
+{
+	*mt = cpu_to_le64(t->tv_sec * NSEC_PER_SEC + t->tv_nsec);
+}
+
+static inline void zuf_r_lock(struct zuf_inode_info *zii)
+{
+	inode_lock_shared(&zii->vfs_inode);
+}
+static inline void zuf_r_unlock(struct zuf_inode_info *zii)
+{
+	inode_unlock_shared(&zii->vfs_inode);
+}
+
+static inline void zuf_smr_lock(struct zuf_inode_info *zii)
+{
+	down_read_nested(&zii->in_sync, 1);
+}
+static inline void zuf_smr_lock_pagefault(struct zuf_inode_info *zii)
+{
+	down_read_nested(&zii->in_sync, 2);
+}
+static inline void zuf_smr_unlock(struct zuf_inode_info *zii)
+{
+	up_read(&zii->in_sync);
+}
+
+static inline void zuf_smw_lock(struct zuf_inode_info *zii)
+{
+	down_write(&zii->in_sync);
+}
+static inline void zuf_smw_lock_nested(struct zuf_inode_info *zii)
+{
+	down_write_nested(&zii->in_sync, 1);
+}
+static inline void zuf_smw_unlock(struct zuf_inode_info *zii)
+{
+	up_write(&zii->in_sync);
+}
+
+static inline void zuf_w_lock(struct zuf_inode_info *zii)
+{
+	inode_lock(&zii->vfs_inode);
+	zuf_smw_lock(zii);
+}
+static inline void zuf_w_lock_nested(struct zuf_inode_info *zii)
+{
+	inode_lock_nested(&zii->vfs_inode, 2);
+	zuf_smw_lock_nested(zii);
+}
+static inline void zuf_w_unlock(struct zuf_inode_info *zii)
+{
+	zuf_smw_unlock(zii);
+	inode_unlock(&zii->vfs_inode);
+}
+
+static inline void ZUF_CHECK_I_W_LOCK(struct inode *inode)
+{
+#ifdef CONFIG_ZUF_DEBUG
+	if (WARN_ON(down_write_trylock(&inode->i_rwsem)))
+		up_write(&inode->i_rwsem);
+#endif
+}
+
+/* CAREFUL: Needs an sfence eventually, after this call */
+static inline
+void zus_inode_cmtime_now(struct inode *inode, struct zus_inode *zi)
+{
+	inode->i_mtime = inode->i_ctime = current_time(inode);
+	timespec_to_mt(&zi->i_ctime, &inode->i_ctime);
+	zi->i_mtime = zi->i_ctime;
 }
 
 /* Keep this include last thing in file */

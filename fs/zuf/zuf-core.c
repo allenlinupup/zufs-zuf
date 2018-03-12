@@ -14,7 +14,6 @@
 #include <linux/mm.h>
 #include <linux/mm_types.h>
 #include <linux/delay.h>
-#include <linux/uaccess.h>
 
 #include "zuf.h"
 
@@ -218,6 +217,71 @@ void zufs_mounter_release(struct file *file)
 			zri->mount.zim->hdr.err = 0;
 		spin_unlock(&zri->mount.lock);
 	}
+}
+
+/* ~~~~ PMEM GRAB ~~~~ */
+static int zufr_find_pmem(struct zuf_root_info *zri,
+		   uint pmem_kern_id, struct zuf_pmem **pmem_md)
+{
+	struct zuf_pmem *z_pmem;
+
+	list_for_each_entry(z_pmem, &zri->pmem_list, list) {
+		if (z_pmem->pmem_id == pmem_kern_id) {
+			*pmem_md = z_pmem;
+			return 0;
+		}
+	}
+
+	return -ENODEV;
+}
+
+static int _zu_grab_pmem(struct file *file, void *parg)
+{
+	struct zuf_root_info *zri = ZRI(file->f_inode->i_sb);
+	struct zufs_ioc_pmem __user *arg_pmem = parg;
+	struct zufs_ioc_pmem zi_pmem = {};
+	struct zuf_pmem *pmem_md;
+	int err;
+
+	err = get_user(zi_pmem.pmem_kern_id, &arg_pmem->pmem_kern_id);
+	if (err) {
+		zuf_err("\n");
+		return err;
+	}
+
+	err = zufr_find_pmem(zri, zi_pmem.pmem_kern_id, &pmem_md);
+	if (err) {
+		zuf_err("!!! pmem_kern_id=%d not found\n",
+			zi_pmem.pmem_kern_id);
+		goto out;
+	}
+
+	if (pmem_md->file) {
+		zuf_err("[%u] pmem already taken\n", zi_pmem.pmem_kern_id);
+		err = -EIO;
+		goto out;
+	}
+
+	err = md_numa_info(&pmem_md->md, &zi_pmem);
+	if (unlikely(err)) {
+		zuf_err("md_numa_info => %d\n", err);
+		goto out;
+	}
+
+	i_size_write(file->f_inode, md_p2o(md_t1_blocks(&pmem_md->md)));
+	pmem_md->hdr.type = zlfs_e_pmem;
+	pmem_md->file = file;
+	file->private_data = &pmem_md->hdr;
+	zuf_dbg_core("pmem %d GRABED %s\n",
+		     zi_pmem.pmem_kern_id,
+		     _bdev_name(md_t1_dev(&pmem_md->md, 0)->bdev));
+
+out:
+	zi_pmem.hdr.err = err;
+	err = copy_to_user(parg, &zi_pmem, sizeof(zi_pmem));
+	if (err)
+		zuf_err("=>%d\n", err);
+	return err;
 }
 
 static int _map_pages(struct zufs_thread *zt, struct page **pages, uint nump,
@@ -451,6 +515,8 @@ long zufs_ioc(struct file *file, unsigned int cmd, ulong arg)
 		return _zu_register_fs(file, parg);
 	case ZU_IOC_MOUNT:
 		return _zu_mount(file, parg);
+	case ZU_IOC_GRAB_PMEM:
+		return _zu_grab_pmem(file, parg);
 	case ZU_IOC_INIT_THREAD:
 		return _zu_init(file, parg);
 	case ZU_IOC_WAIT_OPT:

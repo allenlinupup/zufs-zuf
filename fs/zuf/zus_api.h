@@ -66,6 +66,17 @@
 
 #endif /*  ndef __KERNEL__ */
 
+/*
+ * Maximal count of links to a file
+ */
+#define ZUFS_LINK_MAX          32000
+#define ZUFS_MAX_SYMLINK	PAGE_SIZE
+#define ZUFS_NAME_LEN		255
+#define ZUFS_READAHEAD_PAGES	8
+
+/* All device sizes offsets must align on 2M */
+#define ZUFS_ALLOC_MASK		(1024 * 1024 * 2 - 1)
+
 /**
  * zufs dual port memory
  * This is a special type of offset to either memory or persistent-memory,
@@ -74,6 +85,121 @@
  * appropriate accessors to translate to a pointer.
  */
 typedef __u64	zu_dpp_t;
+
+/*
+ * Structure of a ZUS inode.
+ * This is all the inode fields
+ */
+
+/* zus_inode size */
+#define ZUFS_INODE_SIZE 128    /* must be power of two */
+#define ZUFS_INODE_BITS   7
+
+struct zus_inode {
+	__le32	i_flags;	/* Inode flags */
+	__le16	i_mode;		/* File mode */
+	__le16	i_nlink;	/* Links count */
+	__le64	i_size;		/* Size of data in bytes */
+/* 16*/	struct __zi_on_disk_desc {
+		__le64	a[2];
+	}	i_on_disk;	/* FS-specific on disc placement */
+/* 32*/	__le64	i_blocks;
+	__le64	i_mtime;	/* Inode/data Modification time */
+	__le64	i_ctime;	/* Inode/data Changed time */
+	__le64	i_atime;	/* Data Access time */
+/* 64 - cache-line boundary */
+	__le64	i_ino;		/* Inode number */
+	__le32	i_uid;		/* Owner Uid */
+	__le32	i_gid;		/* Group Id */
+	__le64	i_xattr;	/* FS-specific Extended attribute block */
+	__le64	i_generation;	/* File version (for NFS) */
+/* 96*/	union {
+		__le32	i_rdev;		/* special-inode major/minor etc ...*/
+		u8	i_symlink[32];	/* if i_size < sizeof(i_symlink) */
+		__le64	i_sym_sno;	/* FS-specific symlink placement */
+		struct  _zu_dir {
+			__le64  parent;
+		}	i_dir;
+	};
+	/* Total ZUFS_INODE_SIZE bytes always */
+};
+
+#define ZUFS_SB_SIZE 2048       /* must be power of two */
+
+/* device table s_flags */
+#define		ZUFS_SHADOW	(1UL << 4)	/* simulate cpu cache */
+
+#define test_msb_opt(msb, opt)	(le64_to_cpu(msb->s_flags) & opt)
+
+#define ZUFS_DEV_NUMA_SHIFT		60
+#define ZUFS_DEV_BLOCKS_MASK		0x0FFFFFFFFFFFFFFF
+
+struct md_dev_id {
+	uuid_le	uuid;
+	__le64	blocks;
+} __packed;
+
+static inline __u64 __dev_id_blocks(struct md_dev_id *dev)
+{
+	return le64_to_cpu(dev->blocks) & ZUFS_DEV_BLOCKS_MASK;
+}
+
+static inline int __dev_id_nid(struct md_dev_id *dev)
+{
+	return (int)(le64_to_cpu(dev->blocks) >> ZUFS_DEV_NUMA_SHIFT);
+}
+
+/* 64 is the nicest number to still fit when the ZDT is 2048 and 6 bits can
+ * fit in page struct for address to block translation.
+ */
+#define MD_DEV_MAX   64
+
+struct md_dev_list {
+	__le16		   id_index;	/* index of current dev in list */
+	__le16		   t1_count;	/* # of t1 devs */
+	__le16		   t2_count;	/* # of t2 devs (after t1_count) */
+	__le16		   reserved;	/* align to 64 bit */
+	struct md_dev_id dev_ids[MD_DEV_MAX];
+} __attribute__((aligned(64)));
+
+/*
+ * Structure of the on disk zufs device table
+ * NOTE: zufs_dev_table is always of size ZUFS_SB_SIZE. These below are the
+ *   currently defined/used members in this version.
+ *   TODO: remove the s_ from all the fields
+ */
+struct zufs_dev_table {
+	/* static fields. they never change after file system creation.
+	 * checksum only validates up to s_start_dynamic field below
+	 */
+	__le16		s_sum;              /* checksum of this sb */
+	__le16		s_version;          /* zdt-version */
+	__le32		s_magic;            /* magic signature */
+	uuid_le		s_uuid;		    /* 128-bit uuid */
+	__le64		s_flags;
+	__le64		s_t1_blocks;
+	__le64		s_t2_blocks;
+
+	struct md_dev_list s_dev_list;
+
+	char		s_start_dynamic[0];
+
+	/* all the dynamic fields should go here */
+	__le64		s_mtime;		/* mount time */
+	__le64		s_wtime;		/* write time */
+};
+
+static inline int msb_major_version(struct zufs_dev_table *msb)
+{
+	return le16_to_cpu(msb->s_version) / ZUFS_MINORS_PER_MAJOR;
+}
+
+static inline int msb_minor_version(struct zufs_dev_table *msb)
+{
+	return le16_to_cpu(msb->s_version) % ZUFS_MINORS_PER_MAJOR;
+}
+
+#define ZUFS_SB_STATIC_SIZE(ps) ((u64)&ps->s_start_dynamic - (u64)ps)
 
 /* ~~~~~ ZUFS API ioctl commands ~~~~~ */
 enum {
@@ -143,6 +269,46 @@ struct  zufs_ioc_mount {
 };
 #define ZU_IOC_MOUNT	_IOWR('S', 12, struct zufs_ioc_mount)
 
+/* pmem  */
+struct zufs_ioc_pmem {
+	/* Set by zus */
+	struct zufs_ioc_hdr hdr;
+	__u32 pmem_kern_id;
+
+	/* Returned to zus */
+	__u64 pmem_total_blocks;
+	__u32 max_nodes;
+	__u32 active_pmem_nodes;
+	struct zufs_pmem_info {
+		int sections;
+		struct zufs_pmem_sec {
+			__u32 length;
+			__u16 numa_id;
+			__u16 numa_index;
+		} secs[MD_DEV_MAX];
+	} pmem;
+
+	/* Variable length array mapping A CPU to the proper active pmem to use.
+	 * ZUS starts with 4k if to small hdr.err === ETOSMALL and
+	 * max_cpu_id set for the needed amount.
+	 *
+	 * Careful a user_mode pointer if not needed by server set to NULL
+	 *
+	 * @max_cpu_id is set by server to say how much space at numa_info,
+	 * Kernel returns the actual active CPUs
+	 */
+	struct zufs_numa_info {
+		__u32 max_cpu_id;
+		__u32 pad;
+		struct zufs_cpu_info {
+			__u32 numa_id;
+			__u32 numa_index;
+		} numa_id_map[];
+	} *numa_info;
+};
+/* GRAB is never ungrabed umount or file close cleans it all */
+#define ZU_IOC_GRAB_PMEM	_IOWR('S', 12, struct zufs_ioc_init)
+
 /* ZT init */
 struct zufs_ioc_init {
 	struct zufs_ioc_hdr hdr;
@@ -169,9 +335,20 @@ struct zufs_ioc_wait_operation {
  */
 enum e_zufs_operation {
 	ZUS_OP_NULL = 0,
+	ZUS_OP_STATFS,
 
 	ZUS_OP_BREAK,		/* Kernel telling Server to exit */
 	ZUS_OP_MAX_OPT,
+};
+
+/* ZUS_OP_STATFS */
+struct zufs_ioc_statfs {
+	struct zufs_ioc_hdr hdr;
+	/* IN */
+	struct zus_sb_info *zus_sbi;
+
+	/* OUT */
+	struct statfs64 statfs_out;
 };
 
 #endif /* _LINUX_ZUFS_API_H */
