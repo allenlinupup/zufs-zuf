@@ -20,6 +20,10 @@
 #include <stddef.h>
 #include <asm/statfs.h>
 
+/* TODO: Someone forgot i_version for STATX_ attrs should send a patch to add it
+ */
+#define ZUFS_STATX_VERSION	0x40000000U
+
 /*
  * Version rules:
  *   This is the zus-to-zuf API version. And not the Filesystem
@@ -337,6 +341,28 @@ enum e_zufs_operation {
 	ZUS_OP_NULL = 0,
 	ZUS_OP_STATFS,
 
+	ZUS_OP_NEW_INODE,
+	ZUS_OP_FREE_INODE,
+	ZUS_OP_EVICT_INODE,
+
+	ZUS_OP_LOOKUP,
+	ZUS_OP_ADD_DENTRY,
+	ZUS_OP_REMOVE_DENTRY,
+	ZUS_OP_RENAME,
+	ZUS_OP_READDIR,
+	ZUS_OP_CLONE,
+	ZUS_OP_COPY,
+
+	ZUS_OP_READ,
+	ZUS_OP_WRITE,
+	ZUS_OP_GET_BLOCK,
+	ZUS_OP_GET_SYMLINK,
+	ZUS_OP_SETATTR,
+	ZUS_OP_UPDATE_TIME,
+	ZUS_OP_SYNC,
+	ZUS_OP_FALLOCATE,
+	ZUS_OP_LLSEEK,
+
 	ZUS_OP_BREAK,		/* Kernel telling Server to exit */
 	ZUS_OP_MAX_OPT,
 };
@@ -349,6 +375,214 @@ struct zufs_ioc_statfs {
 
 	/* OUT */
 	struct statfs64 statfs_out;
+};
+
+/* zufs_ioc_new_inode flags: */
+enum zi_flags {
+	ZI_TMPFILE = 1,		/* for new_inode */
+	ZI_LOOKUP_RACE = 1,	/* for evict */
+};
+
+struct zufs_str {
+	__u8 len;
+	char name[ZUFS_NAME_LEN];
+};
+
+/* ZUS_OP_NEW_INODE */
+struct zufs_ioc_new_inode {
+	struct zufs_ioc_hdr hdr;
+	 /* IN */
+	struct zus_inode zi;
+	struct zus_inode_info *dir_ii; /* If mktmp this is the root */
+	struct zufs_str str;
+	__u64 flags;
+
+	 /* OUT */
+	zu_dpp_t _zi;
+	struct zus_inode_info *zus_ii;
+};
+
+/* ZUS_OP_FREE_INODE, ZUS_OP_EVICT_INODE */
+struct zufs_ioc_evict_inode {
+	struct zufs_ioc_hdr hdr;
+	/* IN */
+	struct zus_inode_info *zus_ii;
+	__u64 flags;
+};
+
+/* ZUS_OP_LOOKUP */
+struct zufs_ioc_lookup {
+	struct zufs_ioc_hdr hdr;
+	/* IN */
+	struct zus_inode_info *dir_ii;
+	struct zufs_str str;
+
+	 /* OUT */
+	zu_dpp_t _zi;
+	struct zus_inode_info *zus_ii;
+};
+
+/* ZUS_OP_ADD_DENTRY, ZUS_OP_REMOVE_DENTRY */
+struct zufs_ioc_dentry {
+	struct zufs_ioc_hdr hdr;
+	struct zus_inode_info *zus_ii; /* IN */
+	struct zus_inode_info *zus_dir_ii; /* IN */
+	struct zufs_str str; /* IN */
+	__u64 ino; /* OUT - only for lookup */
+};
+
+/* ZUS_OP_RENAME */
+struct zufs_ioc_rename {
+	struct zufs_ioc_hdr hdr;
+	/* IN */
+	struct zus_inode_info *old_dir_ii;
+	struct zus_inode_info *new_dir_ii;
+	struct zus_inode_info *old_zus_ii;
+	struct zus_inode_info *new_zus_ii;
+	struct zufs_str old_d_str;
+	struct zufs_str new_d_str;
+	__le64 time;
+};
+
+/* ZUS_OP_READDIR */
+struct zufs_ioc_readdir {
+	struct zufs_ioc_hdr hdr;
+	/* IN */
+	struct zus_inode_info *dir_ii;
+	loff_t pos;
+
+	/* OUT */
+	__u8	more;
+};
+
+struct zufs_dir_entry {
+	__le64 ino;
+	struct {
+		unsigned	type	: 8;
+		ulong		pos	: 56;
+	};
+	struct zufs_str zstr;
+};
+
+struct zufs_readdir_iter {
+	void *__zde, *last;
+	struct zufs_ioc_readdir *ioc_readdir;
+};
+
+enum {E_ZDE_HDR_SIZE =
+	offsetof(struct zufs_dir_entry, zstr) + offsetof(struct zufs_str, name),
+};
+
+static inline void zufs_readdir_iter_init(struct zufs_readdir_iter *rdi,
+					  struct zufs_ioc_readdir *ioc_readdir,
+					  void *app_ptr)
+{
+	rdi->__zde = app_ptr;
+	rdi->last = app_ptr + ioc_readdir->hdr.len;
+	rdi->ioc_readdir = ioc_readdir;
+	ioc_readdir->more = false;
+}
+
+static inline uint zufs_dir_entry_len(__u8 name_len)
+{
+	return ALIGN(E_ZDE_HDR_SIZE + name_len, sizeof(__u64));
+}
+
+static inline
+struct zufs_dir_entry *zufs_next_zde(struct zufs_readdir_iter *rdi)
+{
+	struct zufs_dir_entry *zde = rdi->__zde;
+	uint len;
+
+	if (rdi->last <= rdi->__zde + E_ZDE_HDR_SIZE)
+		return NULL;
+	if (zde->zstr.len == 0)
+		return NULL;
+	len = zufs_dir_entry_len(zde->zstr.len);
+	if (rdi->last <= rdi->__zde + len)
+		return NULL;
+
+	rdi->__zde += len;
+	return zde;
+}
+
+static inline bool zufs_zde_emit(struct zufs_readdir_iter *rdi, __u64 ino,
+				 __u8 type, __u64 pos, const char *name,
+				 __u8 len)
+{
+	struct zufs_dir_entry *zde = rdi->__zde;
+
+	if (rdi->last <= rdi->__zde + zufs_dir_entry_len(len)) {
+		rdi->ioc_readdir->more = true;
+		return false;
+	}
+
+	rdi->ioc_readdir->more = 0;
+	zde->ino = ino;
+	zde->type = type;
+	/*ASSERT(0 == (pos && (1 << 56 - 1)));*/
+	zde->pos = pos;
+	strncpy(zde->zstr.name, name, len);
+	zde->zstr.len = len;
+	zufs_next_zde(rdi);
+
+	return true;
+}
+
+/* ZUS_OP_GET_SYMLINK */
+struct zufs_ioc_get_link {
+	struct zufs_ioc_hdr hdr;
+	/* IN */
+	struct zus_inode_info *zus_ii;
+
+	/* OUT */
+	zu_dpp_t _link;
+};
+
+/* ZUS_OP_SETATTR */
+struct zufs_ioc_attr {
+	struct zufs_ioc_hdr hdr;
+	/* IN */
+	struct zus_inode_info *zus_ii;
+	__u64 truncate_size;
+	__u32 zuf_attr;
+	__u32 pad;
+};
+
+/* ZUS_OP_ISYNC, ZUS_OP_FALLOCATE */
+struct zufs_ioc_range {
+	struct zufs_ioc_hdr hdr;
+	/* IN */
+	struct zus_inode_info *zus_ii;
+	__u64 offset, length;
+	__u32 opflags;
+	__u32 pad;
+
+	/* OUT */
+	__u64 write_unmapped;
+};
+
+/* ZUS_OP_CLONE */
+struct zufs_ioc_clone {
+	struct zufs_ioc_hdr hdr;
+	/* IN */
+	struct zus_inode_info *src_zus_ii;
+	struct zus_inode_info *dst_zus_ii;
+	__u64 pos_in, pos_out;
+	__u64 len;
+};
+
+/* ZUS_OP_LLSEEK */
+struct zufs_ioc_seek {
+	struct zufs_ioc_hdr hdr;
+	/* IN */
+	struct zus_inode_info *zus_ii;
+	__u64 offset_in;
+	__u32 whence;
+	__u32 pad;
+
+	/* OUT */
+	__u64 offset_out;
 };
 
 #endif /* _LINUX_ZUFS_API_H */
